@@ -6,7 +6,7 @@ defdatabase SSLAnalyzeDB do
   deftable IPMemCache, [:ip, :cachetime, :state], type: :set do end                                                                                                   
   deftable IPPersist, [:ip, :keyid, :timestamp], type: :bag do end
   deftable CertPersist, [:keyid, :signingkeyid, :blob, :state], type: :set do end
-  deftable DomainPersist, [:domain, :keyid], type: :bag do end
+  deftable DomainPersist, [:tldomain, :domain, :keyid], type: :bag do end
 end 
 
 defmodule Sslanalyze.Process.Supervisor do
@@ -37,7 +37,12 @@ defmodule Sslanalyze.Process.Supervisor do
 
   def fipin({ip,port}) do
     ip = to_char_list(ip)
-    spawn(Sslanalyze.Process.Supervisor, :dispatch, [{ip,port}])
+
+    case SSLAnalyzeDB.IPMemCache.read!(ip) do
+      nil -> spawn(Sslanalyze.Process.Supervisor, :dispatch, [{ip,port}])
+      _   -> Logger.info("CACHE HIT!")
+    end
+
   end
 
   def dispatch({ip,port}) do
@@ -55,13 +60,6 @@ defmodule Sslanalyze.Process do
   require XOTPPUBKEY
   use GenServer
 
-#  Record.defrecord :OTPCertificate, [tbsCertificate: :undefined, signatureAlgorithm: :undefined, signature: :undefined]
-#  Record.defrecord :OTPTBSCertificate, [version: :asn1_DEFAULT, serialNumber: :undefined, signature: :undefined,
-#                                        issuer: :undefined, validity: :undefined, subject: :undefined,
-#                                        subjectPublicKeyInfo: :undefined, issuerUniqueID: :asn1_NOVALUE,
-#                                        subjectUniqueID: :asn1_NOVALUE, extensions: :asn1_NOVALUE]
-#  Record.defrecord :
-  
   def start_link([]) do
     GenServer.start_link(__MODULE__, nil, []) #name: __MODULE__)
   end
@@ -72,9 +70,12 @@ defmodule Sslanalyze.Process do
 
   def handle_call({ip, port}, _from, state) do
     Logger.info("Analysis requested for #{ip}")
-    {:ok, sslsock}  = :ssl.connect(ip, 443, [verify: :verify_peer, cacertfile: '/etc/ssl/certs/ca-certificates.crt', depth: 9, verify_fun: {&Sslanalyze.Process.verify_fun/3,ip}], 2000)
-    :ok = :ssl.close(sslsock)
-    processcertdata(ip)
+#    {:ok, sslsock}  = :ssl.connect(ip, 443, [verify: :verify_peer, cacertfile: '/etc/ssl/certs/ca-certificates.crt', depth: 9, verify_fun: {&Sslanalyze.Process.verify_fun/3,ip}], 2000)
+    case :ssl.connect(ip, 443, [verify: :verify_peer, cacertfile: '/etc/ssl/certs/ca-certificates.crt', depth: 9, verify_fun: {&Sslanalyze.Process.verify_fun/3,ip}], 2000) do
+      {:ok, sslsock} -> :ssl.close(sslsock)
+                        processcertdata(ip)
+      _              -> :ok
+    end
     {:reply, :ok, state}
   end
 
@@ -86,28 +87,85 @@ defmodule Sslanalyze.Process do
   def processcertdata(ip) do
     :ets.lookup(:sslrcvr, ip)
     |> Enum.map(&Tuple.to_list/1)
-    |> Enum.map(&certentry/1)
+    |> Enum.filter(&certentry/1)
+
+    :ets.delete(:sslrcvr, ip)
+    :ok
   end
+
+
+  def commitcert(ip, otpcert) do
+    tbsCertificate = XOTPPUBKEY."OTPCertificate"(otpcert, :tbsCertificate)
+    serialNumber   = XOTPPUBKEY."OTPTBSCertificate"(tbsCertificate, :serialNumber)
+    subject   = XOTPPUBKEY."OTPTBSCertificate"(tbsCertificate, :subject)
+    extensions     = XOTPPUBKEY."OTPTBSCertificate"(tbsCertificate, :extensions)
+
+    keywords = Enum.map(extensions, fn(extent) -> {XOTPPUBKEY."Extension"(extent, :extnID), XOTPPUBKEY."Extension"(extent, :extnValue)} end)
+    |> Enum.map(fn({key, value}) -> {String.to_atom(OID.oid2txt(key)), value} end )
+
+      keyid = Keyword.get(keywords, :"id-ce-subjectKeyIdentifier", [])
+    cakeyid = XOTPPUBKEY."AuthorityKeyIdentifier"(Keyword.get(keywords, :"id-ce-authorityKeyIdentifier", XOTPPUBKEY."AuthorityKeyIdentifier"()), :keyIdentifier)
+    subjAlt = Keyword.get(keywords, :"id-ce-subjectAltName", [])
+
+    Logger.info("KeyID: " <> inspect(keyid))
+    Logger.info("CAKeyID: " <> inspect(cakeyid))
+
+    subject = rationalize_subject(subject)
+    Logger.info("subject: " <> inspect(subject))
+
+    rsubjAlt = extractdNSName(subjAlt)
+    Logger.info("rsubjAlt: " <> inspect(rsubjAlt))
+
+    Amnesia.transaction do
+      SSLAnalyzeDB.IPPersist.write(%SSLAnalyzeDB.IPPersist{ip: ip, keyid: keyid, timestamp: ts})
+      SSLAnalyzeDB.CertPersist.write(%SSLAnalyzeDB.CertPersist{keyid: keyid, signingkeyid: cakeyid, blob: otpcert, state: nil})
+      SSLAnalyzeDB.IPMemCache.write(%SSLAnalyzeDB.IPMemCache{ip: ip, cachetime: ts, state: nil})
+
+      Enum.map(rsubjAlt, fn([full, sld]) -> SSLAnalyzeDB.DomainPersist.write(%SSLAnalyzeDB.DomainPersist{tldomain: sld, domain: full, keyid: keyid}) end )
+    end
+
+
+
+
+  end
+
+  def extractdNSName(subjAlt) do
+    Enum.filter(subjAlt, fn({type, value}) -> if (type == :dNSName) do true else false end end)
+    |> Enum.map(fn({:dNSName, charlist}) -> to_string(charlist) end)
+    |> Enum.map(fn(domain) -> Regex.run(~r/.*([^.]+\.[^.]+)$/r, domain) end )
+  end
+
+
+
+  def rationalize_subject({:rdnSequence, subject}) do
+    Enum.map(subject, fn([x]) -> {OID.oid2txt(XOTPPUBKEY."AttributeTypeAndValue"(x, :type)), XOTPPUBKEY."AttributeTypeAndValue"(x, :value)} end)
+  end
+
+
 
   def certentry([ip, :valid_peer,b]) do
     # Valid chain of custard(y) ;-)
-    tbsCertificate = XOTPPUBKEY."OTPCertificate"(b, :tbsCertificate)
-    serialNumber   = XOTPPUBKEY."OTPTBSCertificate"(tbsCertificate, :serialNumber)
-    Logger.info(inspect(serialNumber))
+    commitcert(ip,b)
   end
 
   def certentry([ip, :valid,b]) do
-    :ok
+    commitcert(ip,b)
+    nil
   end
 
   def certentry([ip, {:extension,_},b]) do
     # Ignore for now
-    :ok
+    nil
   end
 
   def certentry([ip, {:bad_cert, reason},b]) do
     # Bad cert for a good reason
-    :ok
+    nil
+  end
+
+  def ts do
+    {ms, s, _} = :os.timestamp
+    (ms * 1000000) + s
   end
 end
 

@@ -6,7 +6,7 @@ use Bitwise
 defmodule Sslanalyze.Historical.Supervisor do
   use Supervisor
   def start_link() do
-    Supervisor.start_link(__MODULE__, [], [name: __MODULE__])
+    Supervisor.start_link(__MODULE__, [], [name: __MODULE__, debug: [:trace]])
   end
 
   def init([]) do
@@ -48,7 +48,8 @@ defmodule Sslanalyze.Historical.Supervisor do
     |> Enum.map(&inttoIP/1)                                                                     # Convert to real IP "string" (or nil)
     |> Enum.filter(&(&1))                                                                       # Remove nils
     |> Enum.reject(&inMemCache?/1)                                                              # Only process unknown IPs
-    |> IO.inspect
+    |> Enum.map(fn(ipstr) -> Sslanalyze.Process.Supervisor.fipin({ipstr, 443}) end )
+#    |> IO.inspect
   end
 
   def inttoIP("") do
@@ -71,7 +72,7 @@ defmodule Sslanalyze.Historical do
   use GenServer
   
   def start_link([]) do
-    GenServer.start_link(__MODULE__, nil, []) #name: __MODULE__)
+    GenServer.start_link(__MODULE__, nil, [debug: [:trace]]) #name: __MODULE__)
   end
 
   def init(nil) do
