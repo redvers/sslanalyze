@@ -39,8 +39,9 @@ defmodule Sslanalyze.Process.Supervisor do
     ip = to_char_list(ip)
 
     case SSLAnalyzeDB.IPMemCache.read!(ip) do
-      nil -> spawn(Sslanalyze.Process.Supervisor, :dispatch, [{ip,port}])
-      _   -> Logger.info("CACHE HIT!")
+      nil ->      SSLAnalyzeDB.IPMemCache.write!(%SSLAnalyzeDB.IPMemCache{ip: ip, cachetime: ts, state: nil})
+                  spawn(Sslanalyze.Process.Supervisor, :dispatch, [{ip,port}])
+      _   ->      Logger.info("CACHE HIT!")
     end
 
   end
@@ -48,6 +49,11 @@ defmodule Sslanalyze.Process.Supervisor do
   def dispatch({ip,port}) do
     Logger.info("In dispatch")
     :poolboy.transaction(:sslanalyze, fn(worker)-> :gen_server.call(worker, {ip, port}) end, :infinity)
+  end
+
+  def ts do
+    {ms, s, _} = :os.timestamp
+    (ms * 1000000) + s
   end
 end
 
@@ -119,7 +125,6 @@ defmodule Sslanalyze.Process do
     Amnesia.transaction do
       SSLAnalyzeDB.IPPersist.write(%SSLAnalyzeDB.IPPersist{ip: ip, keyid: keyid, timestamp: ts})
       SSLAnalyzeDB.CertPersist.write(%SSLAnalyzeDB.CertPersist{keyid: keyid, signingkeyid: cakeyid, blob: otpcert, state: nil})
-      SSLAnalyzeDB.IPMemCache.write(%SSLAnalyzeDB.IPMemCache{ip: ip, cachetime: ts, state: nil})
 
       Enum.map(rsubjAlt, fn([full, sld]) -> SSLAnalyzeDB.DomainPersist.write(%SSLAnalyzeDB.DomainPersist{tldomain: sld, domain: full, keyid: keyid}) end )
     end

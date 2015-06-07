@@ -11,7 +11,11 @@ defmodule Sslanalyze do
                 Amnesia.Schema.destroy
                 Amnesia.Schema.create
                 Amnesia.start
-                SSLAnalyzeDB.IPMemCache.create!(disk: [node])
+
+                SSLAnalyzeDB.IPMemCache.create!()
+                SSLAnalyzeDB.IPPersist.create!(disk: [node])
+                SSLAnalyzeDB.CertPersist.create!(disk: [node])
+                SSLAnalyzeDB.DomainPersist.create!(disk: [node])
       true  ->  :ok
     end
 
