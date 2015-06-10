@@ -9,9 +9,9 @@ use Mix.Config
 config :sslanalyze, Sslanalyze.Endpoint,
   http: [port: 4000],
   debug_errors: true,
-  code_reloader: true,
   cache_static_lookup: false,
-  watchers: []
+  code_reloader: true,
+  watchers: [node: ["node_modules/brunch/bin/brunch", "watch"]]
 
 # Watch static and templates for browser reloading.
 config :sslanalyze, Sslanalyze.Endpoint,

@@ -17,8 +17,8 @@ defmodule Sslanalyze.Mixfile do
   # Type `mix help compile.app` for more information
   def application do
     [mod: {Sslanalyze, []},
-     applications: [:phoenix, :phoenix_html, :cowboy, :logger,
-                    :amnesia, :cbserverapi, :cbclientapi, :ssl, :public_key]]
+     applications: [:phoenix, :phoenix_html, :cowboy, :logger, 
+                    :runtime_tools, :exjsx, :poolboy, :amnesia, :cbserverapi, :cbclientapi, :ssl, :public_key]]
   end
 
   # Specifies which paths to compile per environment

@@ -8,7 +8,7 @@ use Mix.Config
 # Configures the endpoint
 config :sslanalyze, Sslanalyze.Endpoint,
   url: [host: "localhost"],
-  root: Path.dirname(__DIR__),
+  root: Path.expand("..", __DIR__),
   secret_key_base: "/pttUEmC+5hDGPRWS2D9YzoHcj13JwPGrJcvPLBdxKkGeMtkp1PgpdvwkI02dJrg",
   debug_errors: false,
   pubsub: [name: Sslanalyze.PubSub,

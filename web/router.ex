@@ -16,6 +16,11 @@ defmodule Sslanalyze.Router do
     pipe_through :browser # Use the default browser stack
 
     get "/", PageController, :index
+    get "/ip", PageController, :ips
+  end
+
+  socket "/ws", Sslanalyze do
+    channel "rooms:*", RoomChannel
   end
 
   # Other scopes may use custom stacks.

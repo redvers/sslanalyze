@@ -1,0 +1,6 @@
+<h1>SslAnalyze Debug</h1>
+<h2>IP Population Status</h2>
+<table class="table">
+<tr><th>IP Address</th><th>subject</th><th>Count<th></tr>
+</table>
+

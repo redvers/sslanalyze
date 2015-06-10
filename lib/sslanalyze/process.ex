@@ -4,7 +4,7 @@ use Bitwise
 
 defdatabase SSLAnalyzeDB do                                                                                                                                           
   deftable IPMemCache, [:ip, :cachetime, :state], type: :set do end                                                                                                   
-  deftable IPPersist, [:ip, :keyid, :timestamp], type: :bag do end
+  deftable IPPersist, [:ip, :keyid, :timestamp, :state], type: :bag do end
   deftable CertPersist, [:keyid, :signingkeyid, :blob, :state], type: :set do end
   deftable DomainPersist, [:tldomain, :domain, :keyid], type: :bag do end
 end 
@@ -40,8 +40,9 @@ defmodule Sslanalyze.Process.Supervisor do
 
     case SSLAnalyzeDB.IPMemCache.read!(ip) do
       nil ->      SSLAnalyzeDB.IPMemCache.write!(%SSLAnalyzeDB.IPMemCache{ip: ip, cachetime: ts, state: nil})
+                  :ets.update_counter(:stats, :ssldispatch, 1)
                   spawn(Sslanalyze.Process.Supervisor, :dispatch, [{ip,port}])
-      _   ->      Logger.info("CACHE HIT!")
+      _   ->      :ets.update_counter(:stats, :cachehit, 1)
     end
 
   end
@@ -80,7 +81,9 @@ defmodule Sslanalyze.Process do
     case :ssl.connect(ip, 443, [verify: :verify_peer, cacertfile: '/etc/ssl/certs/ca-certificates.crt', depth: 9, verify_fun: {&Sslanalyze.Process.verify_fun/3,ip}], 2000) do
       {:ok, sslsock} -> :ssl.close(sslsock)
                         processcertdata(ip)
-      _              -> :ok
+      other          -> Amnesia.transaction do
+                          SSLAnalyzeDB.IPPersist.write(%SSLAnalyzeDB.IPPersist{ip: ip, keyid: [], timestamp: ts, state: other})
+                        end
     end
     {:reply, :ok, state}
   end
@@ -100,11 +103,15 @@ defmodule Sslanalyze.Process do
   end
 
 
-  def commitcert(ip, otpcert) do
+  def commitcert(ip, otpcert, querystate) do
     tbsCertificate = XOTPPUBKEY."OTPCertificate"(otpcert, :tbsCertificate)
     serialNumber   = XOTPPUBKEY."OTPTBSCertificate"(tbsCertificate, :serialNumber)
     subject   = XOTPPUBKEY."OTPTBSCertificate"(tbsCertificate, :subject)
     extensions     = XOTPPUBKEY."OTPTBSCertificate"(tbsCertificate, :extensions)
+
+    if (extensions == :asn1_NOVALUE) do
+      extensions = [XOTPPUBKEY."Extension"(extnID: OID.txt2oid("id-ce-subjectKeyIdentifier"), extnValue:  otpcert)]
+    end 
 
     keywords = Enum.map(extensions, fn(extent) -> {XOTPPUBKEY."Extension"(extent, :extnID), XOTPPUBKEY."Extension"(extent, :extnValue)} end)
     |> Enum.map(fn({key, value}) -> {String.to_atom(OID.oid2txt(key)), value} end )
@@ -113,18 +120,18 @@ defmodule Sslanalyze.Process do
     cakeyid = XOTPPUBKEY."AuthorityKeyIdentifier"(Keyword.get(keywords, :"id-ce-authorityKeyIdentifier", XOTPPUBKEY."AuthorityKeyIdentifier"()), :keyIdentifier)
     subjAlt = Keyword.get(keywords, :"id-ce-subjectAltName", [])
 
-    Logger.info("KeyID: " <> inspect(keyid))
-    Logger.info("CAKeyID: " <> inspect(cakeyid))
+    #Logger.info("KeyID: " <> inspect(keyid))
+    #Logger.info("CAKeyID: " <> inspect(cakeyid))
 
     subject = rationalize_subject(subject)
-    Logger.info("subject: " <> inspect(subject))
+    #Logger.info("subject: " <> inspect(subject))
 
     rsubjAlt = extractdNSName(subjAlt)
     Logger.info("rsubjAlt: " <> inspect(rsubjAlt))
 
     Amnesia.transaction do
-      SSLAnalyzeDB.IPPersist.write(%SSLAnalyzeDB.IPPersist{ip: ip, keyid: keyid, timestamp: ts})
-      SSLAnalyzeDB.CertPersist.write(%SSLAnalyzeDB.CertPersist{keyid: keyid, signingkeyid: cakeyid, blob: otpcert, state: nil})
+      SSLAnalyzeDB.IPPersist.write(%SSLAnalyzeDB.IPPersist{ip: ip, keyid: keyid, timestamp: ts, state: querystate})
+      SSLAnalyzeDB.CertPersist.write(%SSLAnalyzeDB.CertPersist{keyid: keyid, signingkeyid: cakeyid, blob: otpcert, state: querystate})
 
       Enum.map(rsubjAlt, fn([full, sld]) -> SSLAnalyzeDB.DomainPersist.write(%SSLAnalyzeDB.DomainPersist{tldomain: sld, domain: full, keyid: keyid}) end )
     end
@@ -150,11 +157,11 @@ defmodule Sslanalyze.Process do
 
   def certentry([ip, :valid_peer,b]) do
     # Valid chain of custard(y) ;-)
-    commitcert(ip,b)
+    commitcert(ip,b,:valid_peer)
   end
 
   def certentry([ip, :valid,b]) do
-    commitcert(ip,b)
+    commitcert(ip,b,:valid_peer)
     nil
   end
 
@@ -164,8 +171,7 @@ defmodule Sslanalyze.Process do
   end
 
   def certentry([ip, {:bad_cert, reason},b]) do
-    # Bad cert for a good reason
-    nil
+    commitcert(ip,b,reason)
   end
 
   def ts do

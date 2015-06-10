@@ -26,7 +26,7 @@ defmodule Sslanalyze do
       supervisor(Sslanalyze.Process.Supervisor, []),
       supervisor(Sslanalyze.Historical.Supervisor, []),
       # Here you could define other workers and supervisors as children
-      # worker(Sslanalyze.Worker, [arg1, arg2, arg3]),
+      worker(SslAnalyze.WebUpdate, []),
     ]
 
     # See http://elixir-lang.org/docs/stable/elixir/Supervisor.html
