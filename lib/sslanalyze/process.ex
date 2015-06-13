@@ -166,11 +166,14 @@ defmodule Sslanalyze.Process do
   end
 
   def certentry([ip, {:extension,_},b]) do
-    # Ignore for now
     nil
   end
 
   def certentry([ip, {:bad_cert, reason},b]) do
+    Sslanalyze.Endpoint.broadcast! "rooms:lobby", "new_msg",
+      %{body: to_string(ip) <> ": FAILED - " <> inspect(reason) <> "</br>"}
+
+    # Ignore for now
     commitcert(ip,b,reason)
   end
 
