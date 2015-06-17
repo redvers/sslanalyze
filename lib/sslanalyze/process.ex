@@ -2,12 +2,12 @@ require Logger
 use Amnesia
 use Bitwise
 
-defdatabase SSLAnalyzeDB do                                                                                                                                           
-  deftable IPMemCache, [:ip, :cachetime, :state], type: :set do end                                                                                                   
+defdatabase SSLAnalyzeDB do
+  deftable IPMemCache, [:ip, :cachetime, :state], type: :set do end
   deftable IPPersist, [:ip, :keyid, :timestamp, :state], type: :bag do end
   deftable CertPersist, [:keyid, :signingkeyid, :blob, :state], type: :set do end
   deftable DomainPersist, [:tldomain, :domain, :keyid], type: :bag do end
-end 
+end
 
 defmodule Sslanalyze.Process.Supervisor do
   use Supervisor
